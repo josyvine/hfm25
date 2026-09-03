@@ -152,8 +152,10 @@ public class MassDeleteAdapter extends RecyclerView.Adapter<RecyclerView.ViewHol
                 contrastColor = ContextCompat.getColor(context, R.color.lt_colorPrimary);
             }
 
+            boolean isDirectory = item.getPath() != null && new File(item.getPath()).isDirectory();
+
             // Display Filename logic
-            if (isMediaFile(item.getDisplayName())) {
+            if (isMediaFile(item.getDisplayName()) && !isDirectory) {
                 itemHolder.fileNameText.setVisibility(View.GONE);
             } else {
                 itemHolder.fileNameText.setVisibility(View.VISIBLE);
@@ -161,11 +163,14 @@ public class MassDeleteAdapter extends RecyclerView.Adapter<RecyclerView.ViewHol
             }
 
             String displayName = item.getDisplayName();
-            int fallbackIcon = getIconForFileType(displayName);
+            int fallbackIcon = isDirectory ? R.drawable.ic_folder_modern : getIconForFileType(displayName);
 
-            boolean isPdfOrApk = displayName != null && (displayName.toLowerCase().endsWith(".pdf") || displayName.toLowerCase().endsWith(".apk"));
+            boolean isPdfOrApk = !isDirectory && displayName != null && (displayName.toLowerCase().endsWith(".pdf") || displayName.toLowerCase().endsWith(".apk"));
 
-            if (isPdfOrApk) {
+            if (isDirectory) {
+                itemHolder.thumbnailImage.setImageResource(R.drawable.ic_folder_modern);
+                itemHolder.thumbnailImage.setColorFilter(contrastColor, PorterDuff.Mode.SRC_IN);
+            } else if (isPdfOrApk) {
                 // Set placeholder
                 itemHolder.thumbnailImage.setImageResource(fallbackIcon);
                 itemHolder.thumbnailImage.setColorFilter(contrastColor, PorterDuff.Mode.SRC_IN);
@@ -241,7 +246,7 @@ public class MassDeleteAdapter extends RecyclerView.Adapter<RecyclerView.ViewHol
     }
 
     private int getIconForFileType(String fileName) {
-        if (fileName == null) return R.drawable.ic_folder_modern;
+        if (fileName == null) return R.drawable.category_24px;
         String lower = fileName.toLowerCase();
 
         if (lower.endsWith(".doc") || lower.endsWith(".docx") || lower.endsWith(".pdf")) return R.drawable.docs_24px;
@@ -252,7 +257,7 @@ public class MassDeleteAdapter extends RecyclerView.Adapter<RecyclerView.ViewHol
         if (lower.endsWith(".mp3") || lower.endsWith(".wav") || lower.endsWith(".ogg")) return R.drawable.audio_file_24px;
         if (isMediaFile(fileName)) return R.drawable.image_24px;
 
-        return R.drawable.ic_folder_modern;
+        return R.drawable.category_24px;
     }
 
     private Bitmap createSpecialThumbnail(SearchResult item) {
