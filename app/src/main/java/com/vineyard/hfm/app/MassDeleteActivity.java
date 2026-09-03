@@ -45,6 +45,7 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 
 import androidx.core.content.ContextCompat;
+import androidx.core.content.FileProvider;
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 import androidx.recyclerview.widget.GridLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
@@ -747,6 +748,13 @@ public class MassDeleteActivity extends Activity implements MassDeleteAdapter.On
         return match;
     }
 
+    private boolean isArchiveFile(String fileName) {
+        if (fileName == null) return false;
+        String lower = fileName.toLowerCase(Locale.ROOT);
+        return lower.endsWith(".zip") || lower.endsWith(".rar") || lower.endsWith(".7z") ||
+               lower.endsWith(".tar") || lower.endsWith(".gz") || lower.endsWith(".bz2");
+    }
+
     private QueryParameters parseQuery(String query) {
         QueryParameters params = new QueryParameters();
         String modifiedQuery = query;
@@ -1128,6 +1136,13 @@ public class MassDeleteActivity extends Activity implements MassDeleteAdapter.On
                 else if (itemId == R.id.filter_documents) currentFilterType = "documents";
                 else if (itemId == R.id.filter_archives) currentFilterType = "archives";
                 else if (itemId == R.id.filter_other) currentFilterType = "other";
+                else if (itemId == R.id.filter_browse) {
+                    Intent browseIntent = new Intent(MassDeleteActivity.this, StorageBrowserActivity.class);
+                    browseIntent.putExtra("storage_path", Environment.getExternalStorageDirectory().getAbsolutePath());
+                    browseIntent.putExtra("storage_name", "Internal Storage");
+                    startActivity(browseIntent);
+                    return true;
+                }
                 executeQuery(searchInput.getText().toString());
                 return true;
             }
@@ -1147,17 +1162,43 @@ public class MassDeleteActivity extends Activity implements MassDeleteAdapter.On
 
     @Override
     public void onItemLongClick(final MassDeleteAdapter.SearchResult item) {
-        final CharSequence[] options = {"Open", "Details", "Compress"};
+        if (item == null) return;
+        final File file = getFileFromResult(item);
+        if (file == null || !file.exists()) {
+            Toast.makeText(this, "File no longer exists.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        final String fileName = file.getName();
+        final boolean isArchive = isArchiveFile(fileName);
+        final boolean isApk = fileName.toLowerCase(Locale.ROOT).endsWith(".apk");
+
+        List<String> optionsList = new ArrayList<>();
+        if (isApk) {
+            optionsList.add("Install");
+        }
+        optionsList.add("Open");
+        if (isArchive) {
+            optionsList.add("Extract");
+        }
+        optionsList.add("Details");
+        optionsList.add("Compress");
+
+        final CharSequence[] options = optionsList.toArray(new CharSequence[0]);
         new AlertDialog.Builder(this)
             .setItems(options, new DialogInterface.OnClickListener() {
                 @Override
                 public void onClick(DialogInterface dialog, int which) {
-                    if (which == 0) {
+                    String selectedOption = options[which].toString();
+                    if ("Install".equals(selectedOption)) {
+                        installApk(file);
+                    } else if ("Open".equals(selectedOption)) {
                         openFileViewer(item);
-                    } else if (which == 1) {
+                    } else if ("Extract".equals(selectedOption)) {
+                        extractArchive(file);
+                    } else if ("Details".equals(selectedOption)) {
                         List<File> files = getFilesFromResults(Collections.singletonList(item));
                         showDetailsDialog(files);
-                    } else if (which == 2) {
+                    } else if ("Compress".equals(selectedOption)) {
                         List<File> files = getFilesFromResults(Collections.singletonList(item));
                         if (!files.isEmpty() && files.get(0).getParentFile() != null) {
                             ArchiveUtils.startCompression(MassDeleteActivity.this, files, files.get(0).getParentFile());
@@ -1167,6 +1208,38 @@ public class MassDeleteActivity extends Activity implements MassDeleteAdapter.On
                 }
             })
             .show();
+    }
+
+    private void installApk(File file) {
+        try {
+            if (file == null || !file.exists()) {
+                Toast.makeText(this, "APK file not found.", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            Intent intent = new Intent(Intent.ACTION_VIEW);
+            Uri apkUri = FileProvider.getUriForFile(this, getPackageName() + ".provider", file);
+            intent.setDataAndType(apkUri, "application/vnd.android.package-archive");
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(intent);
+        } catch (Exception e) {
+            AppLogger.logError(TAG, "Failed to launch package installer", e);
+            Toast.makeText(this, "Could not launch package installer: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void extractArchive(File file) {
+        try {
+            if (file == null || !file.exists()) {
+                Toast.makeText(this, "Archive file not found.", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            File destDir = file.getParentFile() != null ? file.getParentFile() : Environment.getExternalStorageDirectory();
+            ArchiveUtils.extractArchive(this, file, destDir);
+            Toast.makeText(this, "Extraction started...", Toast.LENGTH_SHORT).show();
+        } catch (Exception e) {
+            AppLogger.logError(TAG, "Failed to start extraction", e);
+            Toast.makeText(this, "Extraction failed: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+        }
     }
 
     @Override
@@ -1249,6 +1322,19 @@ public class MassDeleteActivity extends Activity implements MassDeleteAdapter.On
         File checkFile = getFileFromResult(item);
         if (checkFile == null || !checkFile.exists()) {
             Toast.makeText(this, "File no longer exists.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        if (checkFile.isDirectory()) {
+            Intent browserIntent = new Intent(this, StorageBrowserActivity.class);
+            browserIntent.putExtra("storage_path", checkFile.getAbsolutePath());
+            browserIntent.putExtra("storage_name", checkFile.getName());
+            startActivity(browserIntent);
+            return;
+        }
+
+        if (checkFile.getName().toLowerCase(Locale.ROOT).endsWith(".apk")) {
+            installApk(checkFile);
             return;
         }
 
