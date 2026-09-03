@@ -1,4 +1,4 @@
-package com.vineyard.hfm.app;   
+package com.vineyard.hfm.app;
 
 import android.app.Activity;
 import android.app.AlertDialog;
@@ -45,6 +45,7 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 
 import androidx.core.content.ContextCompat;
+import androidx.core.content.FileProvider;
 import androidx.documentfile.provider.DocumentFile;
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 import androidx.recyclerview.widget.GridLayoutManager;
@@ -107,7 +108,7 @@ public class SearchActivity extends Activity implements SearchAdapter.OnItemClic
     private static final int CATEGORY_OTHER = 5;
 
     private final ExecutorService searchExecutor = Executors.newSingleThreadExecutor();
-    private Future<?> currentSearchFuture = null; // Thread Immunity: Task reference to control cancellations
+    private Future<?> currentSearchFuture = null;
 
     private static final Pattern FILE_BASE_NAME_PATTERN = Pattern.compile("^(IMG|VID|PANO|DSC)_\\d{8}_\\d{6}");
 
@@ -391,12 +392,6 @@ public class SearchActivity extends Activity implements SearchAdapter.OnItemClic
         return groupedList;
     }
 
-    /**
-     * UNIVERSAL MASTER ENGINE: 100% OEM-Agnostic & ColorOS / OPPO Safe.
-     * Guarantees 0% ghost thumbnails via physical File.exists() verification.
-     * Includes Progressive Batch Rendering for "All" and "Other" filters.
-     * Employs B-Tree Indexed Prefix Scoping to bypass Full Table Scans.
-     */
     private List<SearchResult> executeQueryWithMediaStore(QueryParameters params) {
         List<SearchResult> masterResults = new ArrayList<>();
         Set<String> processedPaths = new HashSet<>();
@@ -407,7 +402,6 @@ public class SearchActivity extends Activity implements SearchAdapter.OnItemClic
                 masterResults.addAll(querySingleUriSafely(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, params, MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO, processedPaths));
                 masterResults.addAll(querySingleUriSafely(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, params, MediaStore.Files.FileColumns.MEDIA_TYPE_AUDIO, processedPaths));
 
-                // PROGRESSIVE BATCH RENDERING: Render fast media items instantly (<100ms) before scanning master files URI
                 if (!masterResults.isEmpty() && !Thread.currentThread().isInterrupted()) {
                     List<SearchResult> initialBatch = new ArrayList<>(masterResults);
                     Collections.sort(initialBatch, new Comparator<SearchResult>() {
@@ -471,8 +465,6 @@ public class SearchActivity extends Activity implements SearchAdapter.OnItemClic
                 addFilterClauses(selection, selectionArgs);
             }
 
-            // B-TREE INDEXED PREFIX SCOPING: Apply positive directory path scoping for Video and Master Files queries
-            // Directly leverages SQLite string index (<5ms lookup) and skips 82,000+ app cache files and C++ timeouts
             if (params.folderPath != null && !params.folderPath.isEmpty()) {
                 if (selection.length() > 0) selection.append(" AND ");
                 selection.append(MediaStore.Files.FileColumns.DATA + " LIKE ?");
@@ -507,7 +499,6 @@ public class SearchActivity extends Activity implements SearchAdapter.OnItemClic
             selection.append(MediaStore.Files.FileColumns.DATA + " NOT LIKE ?");
             selectionArgs.add("%/HFMRecycleBin/%");
 
-            // UNIVERSAL OEM FIX: Exclude system app caches, private directories, OPPO Pictorial wallpapers, and hidden cache folders
             if (selection.length() > 0) selection.append(" AND ");
             selection.append(MediaStore.Files.FileColumns.DATA + " NOT LIKE ? AND " + 
                              MediaStore.Files.FileColumns.DATA + " NOT LIKE ? AND " + 
@@ -531,30 +522,19 @@ public class SearchActivity extends Activity implements SearchAdapter.OnItemClic
                 selectionArgs.add(String.valueOf(params.endTimeSeconds));
             }
 
-            boolean isFilesUri = queryUri.equals(MediaStore.Files.getContentUri("external"));
-            String[] projection;
-            if (isFilesUri) {
-                projection = new String[] {
-                    MediaStore.Files.FileColumns._ID,
-                    MediaStore.Files.FileColumns.MEDIA_TYPE,
-                    MediaStore.Files.FileColumns.DATE_MODIFIED,
-                    MediaStore.Files.FileColumns.DISPLAY_NAME,
-                    MediaStore.Files.FileColumns.DATA
-                };
-            } else {
-                projection = new String[] {
-                    MediaStore.Files.FileColumns._ID,
-                    MediaStore.Files.FileColumns.DATE_MODIFIED,
-                    MediaStore.Files.FileColumns.DISPLAY_NAME,
-                    MediaStore.Files.FileColumns.DATA
-                };
-            }
+            String[] projection = new String[] {
+                MediaStore.Files.FileColumns._ID,
+                MediaStore.Files.FileColumns.MEDIA_TYPE,
+                MediaStore.Files.FileColumns.DATE_MODIFIED,
+                MediaStore.Files.FileColumns.DISPLAY_NAME,
+                MediaStore.Files.FileColumns.DATA
+            };
 
             cursor = getContentResolver().query(queryUri, projection, selection.toString(), selectionArgs.toArray(new String[0]), null);
 
             if (cursor != null) {
                 int idColumn = cursor.getColumnIndex(MediaStore.Files.FileColumns._ID);
-                int mediaTypeColumn = isFilesUri ? cursor.getColumnIndex(MediaStore.Files.FileColumns.MEDIA_TYPE) : -1;
+                int mediaTypeColumn = cursor.getColumnIndex(MediaStore.Files.FileColumns.MEDIA_TYPE);
                 int dateModifiedColumn = cursor.getColumnIndex(MediaStore.Files.FileColumns.DATE_MODIFIED);
                 int displayNameColumn = cursor.getColumnIndex(MediaStore.Files.FileColumns.DISPLAY_NAME);
                 int dataColumn = cursor.getColumnIndex(MediaStore.Files.FileColumns.DATA);
@@ -562,7 +542,7 @@ public class SearchActivity extends Activity implements SearchAdapter.OnItemClic
                 while (cursor.moveToNext()) {
                     if (Thread.currentThread().isInterrupted()) {
                         AppLogger.log(TAG, "[THREAD_CANCELLED] Cursor iteration interrupted for URI: " + queryUri);
-                        break; // Thread cancellation check to release SQLite read-lock immediately
+                        break;
                     }
                     try {
                         long id = (idColumn != -1) ? cursor.getLong(idColumn) : -1;
@@ -575,10 +555,9 @@ public class SearchActivity extends Activity implements SearchAdapter.OnItemClic
                             continue;
                         }
 
-                        // GHOST THUMBNAIL SUPPRESSION: Mandatory physical file verification
                         File actualFile = new File(path);
                         if (!actualFile.exists()) {
-                            continue; // Skip ghost entries that no longer exist on disk
+                            continue;
                         }
 
                         long lastModifiedMillis = dateModifiedSeconds * 1000;
@@ -616,7 +595,7 @@ public class SearchActivity extends Activity implements SearchAdapter.OnItemClic
             Log.e(TAG, "Error querying URI " + queryUri + ": " + e.getMessage());
         } finally {
             if (cursor != null) {
-                cursor.close(); // Guarantees SQLite read-lock release on ColorOS
+                cursor.close();
                 if (Thread.currentThread().isInterrupted()) {
                     AppLogger.log(TAG, "[THREAD_CANCELLED] Cursor closed and SQLite read-lock handle released for URI: " + queryUri);
                 }
@@ -722,7 +701,6 @@ public class SearchActivity extends Activity implements SearchAdapter.OnItemClic
             selectionArgs.addAll(Arrays.asList("application/zip", "application/vnd.rar", "application/x-7z-compressed",
                                                "application/x-tar", "application/gzip"));
         } else if ("other".equals(currentFilterType)) {
-            // INDEXED EXTENSION FILTERING FOR "OTHER": Restricts search to uncategorized user file types (<50ms execution)
             selection.append("(" +
                     MediaStore.Files.FileColumns.DATA + " LIKE ? OR " +
                     MediaStore.Files.FileColumns.DATA + " LIKE ? OR " +
@@ -745,7 +723,7 @@ public class SearchActivity extends Activity implements SearchAdapter.OnItemClic
         String extension = "";
         int i = fileName.lastIndexOf('.');
         if (i > 0) {
-            extension = fileName.substring(i + 1).toLowerCase();
+            extension = fileName.substring(i + 1).toLowerCase(Locale.ROOT);
         }
 
         switch (currentFilterType) {
@@ -773,13 +751,20 @@ public class SearchActivity extends Activity implements SearchAdapter.OnItemClic
         return match;
     }
 
+    private boolean isArchiveFile(String fileName) {
+        if (fileName == null) return false;
+        String lower = fileName.toLowerCase(Locale.ROOT);
+        return lower.endsWith(".zip") || lower.endsWith(".rar") || lower.endsWith(".7z") ||
+               lower.endsWith(".tar") || lower.endsWith(".gz") || lower.endsWith(".bz2");
+    }
+
     private QueryParameters parseQuery(String query) {
         QueryParameters params = new QueryParameters();
         String q_trimmed = query.trim();
         if (q_trimmed.isEmpty()) {
             return params;
         }
-        String q_lower = q_trimmed.toLowerCase();
+        String q_lower = q_trimmed.toLowerCase(Locale.ROOT);
 
         switch (currentFilterType) {
             case "images":
@@ -900,7 +885,7 @@ public class SearchActivity extends Activity implements SearchAdapter.OnItemClic
 
                 for (int i = 0; i < originalParts.length; i++) {
                     if (used[i]) continue;
-                    String partLower = originalParts[i].toLowerCase();
+                    String partLower = originalParts[i].toLowerCase(Locale.ROOT);
                     if (partLower.equals("today")) {
                         params.setDateRange(getStartOfToday(), getEndOfToday());
                         used[i] = true;
@@ -1228,41 +1213,6 @@ public class SearchActivity extends Activity implements SearchAdapter.OnItemClic
         });
     }
 
-    private List<SearchResult> findSiblingFiles(SearchResult originalResult) {
-        List<SearchResult> siblings = new ArrayList<>();
-        siblings.add(originalResult);
-
-        if (originalResult.getPath() == null) {
-            return siblings;
-        }
-
-        File originalFile = new File(originalResult.getPath());
-        String fileName = originalFile.getName();
-        Matcher matcher = FILE_BASE_NAME_PATTERN.matcher(fileName);
-
-        if (matcher.find()) {
-            String baseName = matcher.group(0);
-            File parentDir = originalFile.getParentFile();
-
-            if (parentDir != null && parentDir.isDirectory()) {
-                for (Object item : masterList) {
-                    if (item instanceof SearchResult) {
-                        SearchResult potentialSibling = (SearchResult) item;
-                        if (potentialSibling.getPath() != null) {
-                            File potentialFile = new File(potentialSibling.getPath());
-                            if (potentialFile.getParent() != null && potentialFile.getParent().equals(parentDir.getAbsolutePath()) &&
-                                potentialFile.getName().startsWith(baseName) &&
-                                !potentialFile.getAbsolutePath().equals(originalFile.getAbsolutePath())) {
-                                siblings.add(potentialSibling);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        return siblings;
-    }
-
     private void performDelete(final List<SearchResult> toDelete, int batchSize) {
         ArrayList<String> filePathsToDelete = new ArrayList<>();
         for (SearchResult result : toDelete) {
@@ -1356,6 +1306,13 @@ public class SearchActivity extends Activity implements SearchAdapter.OnItemClic
                 else if (itemId == R.id.filter_documents) currentFilterType = "documents";
                 else if (itemId == R.id.filter_archives) currentFilterType = "archives";
                 else if (itemId == R.id.filter_other) currentFilterType = "other";
+                else if (itemId == R.id.filter_browse) {
+                    Intent browseIntent = new Intent(SearchActivity.this, StorageBrowserActivity.class);
+                    browseIntent.putExtra("storage_path", Environment.getExternalStorageDirectory().getAbsolutePath());
+                    browseIntent.putExtra("storage_name", "Internal Storage");
+                    startActivity(browseIntent);
+                    return true;
+                }
 
                 masterList.clear();
                 displayList.clear();
@@ -1373,24 +1330,47 @@ public class SearchActivity extends Activity implements SearchAdapter.OnItemClic
         item.setExcluded(!item.isExcluded());
         updateHeaderStateForItem(item);
         int index = displayList.indexOf(item);
-        if(index != -1) {
+        if (index != -1) {
             adapter.notifyItemChanged(index);
         }
     }
 
     @Override
     public void onItemLongClick(final SearchResult item) {
-        final CharSequence[] options = {"Open", "Details", "Compress"};
+        if (item == null || item.getPath() == null) return;
+        final File file = new File(item.getPath());
+        final String fileName = file.getName();
+        final boolean isDir = file.isDirectory();
+        final boolean isArchive = isArchiveFile(fileName);
+        final boolean isApk = fileName.toLowerCase(Locale.ROOT).endsWith(".apk");
+
+        List<String> optionsList = new ArrayList<>();
+        if (isApk) {
+            optionsList.add("Install");
+        }
+        optionsList.add("Open");
+        if (isArchive) {
+            optionsList.add("Extract");
+        }
+        optionsList.add("Details");
+        optionsList.add("Compress");
+
+        final CharSequence[] options = optionsList.toArray(new CharSequence[0]);
         new AlertDialog.Builder(this)
             .setItems(options, new DialogInterface.OnClickListener() {
                 @Override
                 public void onClick(DialogInterface dialog, int which) {
-                    if (which == 0) {
+                    String selectedOption = options[which].toString();
+                    if ("Install".equals(selectedOption)) {
+                        installApk(file);
+                    } else if ("Open".equals(selectedOption)) {
                         openFileViewer(item);
-                    } else if (which == 1) {
+                    } else if ("Extract".equals(selectedOption)) {
+                        extractArchive(file);
+                    } else if ("Details".equals(selectedOption)) {
                         List<File> files = getFilesFromResults(Collections.singletonList(item));
                         showDetailsDialog(files);
-                    } else if (which == 2) {
+                    } else if ("Compress".equals(selectedOption)) {
                         List<File> files = getFilesFromResults(Collections.singletonList(item));
                         if (!files.isEmpty() && files.get(0).getParentFile() != null) {
                             ArchiveUtils.startCompression(SearchActivity.this, files, files.get(0).getParentFile());
@@ -1400,6 +1380,38 @@ public class SearchActivity extends Activity implements SearchAdapter.OnItemClic
                 }
             })
             .show();
+    }
+
+    private void installApk(File file) {
+        try {
+            if (file == null || !file.exists()) {
+                Toast.makeText(this, "APK file not found.", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            Intent intent = new Intent(Intent.ACTION_VIEW);
+            Uri apkUri = FileProvider.getUriForFile(this, getPackageName() + ".provider", file);
+            intent.setDataAndType(apkUri, "application/vnd.android.package-archive");
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(intent);
+        } catch (Exception e) {
+            AppLogger.logError(TAG, "Failed to launch package installer", e);
+            Toast.makeText(this, "Could not launch installer: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void extractArchive(File file) {
+        try {
+            if (file == null || !file.exists()) {
+                Toast.makeText(this, "Archive file not found.", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            File destDir = file.getParentFile() != null ? file.getParentFile() : Environment.getExternalStorageDirectory();
+            ArchiveUtils.extractArchive(this, file, destDir);
+            Toast.makeText(this, "Extraction started...", Toast.LENGTH_SHORT).show();
+        } catch (Exception e) {
+            AppLogger.logError(TAG, "Failed to start extraction", e);
+            Toast.makeText(this, "Extraction failed: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+        }
     }
 
     @Override
@@ -1687,17 +1699,6 @@ public class SearchActivity extends Activity implements SearchAdapter.OnItemClic
         dialog.show();
     }
 
-    private File getFileFromResult(SearchResult result) {
-        if ("file".equals(result.getUri().getScheme())) {
-            return new File(result.getUri().getPath());
-        }
-        String path = result.getPath();
-        if (path != null) {
-            return new File(path);
-        }
-        return null;
-    }
-
     private void showSendToDropDialog(final List<File> filesToSend) {
         AlertDialog.Builder builder = new AlertDialog.Builder(this);
         LayoutInflater inflater = this.getLayoutInflater();
@@ -1722,12 +1723,6 @@ public class SearchActivity extends Activity implements SearchAdapter.OnItemClic
                 })
                 .setNegativeButton("Cancel", null);
         builder.create().show();
-    }
-
-    private void showSendToDropDialog(final File fileToSend) {
-        List<File> singleFileList = new ArrayList<>();
-        singleFileList.add(fileToSend);
-        showSendToDropDialog(singleFileList);
     }
 
     private void showSenderWarningDialog(final String receiverUsername, final List<File> filesToSend) {
@@ -1772,12 +1767,6 @@ public class SearchActivity extends Activity implements SearchAdapter.OnItemClic
                     }
                 });
         builder.create().show();
-    }
-
-    private void showSenderWarningDialog(final String receiverUsername, final File fileToSend) {
-        List<File> singleFileList = new ArrayList<>();
-        singleFileList.add(fileToSend);
-        showSenderWarningDialog(receiverUsername, singleFileList);
     }
 
     private void startSenderService(String receiverUsername, String secretNumber, List<File> filesToSend) {
@@ -1834,6 +1823,19 @@ public class SearchActivity extends Activity implements SearchAdapter.OnItemClic
             masterList.remove(item);
             rebuildDisplayList();
             Toast.makeText(this, "File no longer exists.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        if (checkFile.isDirectory()) {
+            Intent browserIntent = new Intent(this, StorageBrowserActivity.class);
+            browserIntent.putExtra("storage_path", checkFile.getAbsolutePath());
+            browserIntent.putExtra("storage_name", checkFile.getName());
+            startActivity(browserIntent);
+            return;
+        }
+
+        if (checkFile.getName().toLowerCase(Locale.ROOT).endsWith(".apk")) {
+            installApk(checkFile);
             return;
         }
 
