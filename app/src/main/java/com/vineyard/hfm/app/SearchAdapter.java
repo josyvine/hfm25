@@ -28,6 +28,7 @@ import com.bumptech.glide.request.RequestOptions;
 import com.vineyard.hfm.app.SearchActivity.DateHeader;
 import com.vineyard.hfm.app.SearchActivity.SearchResult;
 
+import java.io.File;
 import java.io.IOException;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
@@ -131,7 +132,9 @@ public class SearchAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder>
             itemHolder.exclusionOverlay.setVisibility(item.isExcluded() ? View.GONE : View.VISIBLE);
             itemHolder.thumbnailImage.setTag(item.getUri().toString());
 
-            if (isMediaFile(item.getDisplayName())) {
+            boolean isDirectory = item.getPath() != null && new File(item.getPath()).isDirectory();
+
+            if (isMediaFile(item.getDisplayName()) && !isDirectory) {
                 itemHolder.fileNameText.setVisibility(View.GONE);
             } else {
                 itemHolder.fileNameText.setVisibility(View.VISIBLE);
@@ -139,15 +142,18 @@ public class SearchAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder>
             }
 
             String displayName = item.getDisplayName();
-            int fallbackIcon = getIconForFileType(displayName);
+            int fallbackIcon = isDirectory ? R.drawable.ic_folder_modern : getIconForFileType(displayName);
 
             // LOGIC PRESERVATION: 
+            // If it's a Directory, set the modern folder icon directly.
             // If it's a PDF or APK, use your ORIGINAL manual loading logic (restored below).
             // If it's Image/Video, use GLIDE for performance.
             
-            boolean isPdfOrApk = displayName != null && (displayName.toLowerCase().endsWith(".pdf") || displayName.toLowerCase().endsWith(".apk"));
+            boolean isPdfOrApk = !isDirectory && displayName != null && (displayName.toLowerCase().endsWith(".pdf") || displayName.toLowerCase().endsWith(".apk"));
 
-            if (isPdfOrApk) {
+            if (isDirectory) {
+                itemHolder.thumbnailImage.setImageResource(R.drawable.ic_folder_modern);
+            } else if (isPdfOrApk) {
                 // Restore Original Logic for PDFs and APKs
                 itemHolder.thumbnailImage.setImageResource(fallbackIcon); // Set placeholder first
                 
