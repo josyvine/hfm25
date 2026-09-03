@@ -19,6 +19,8 @@
     <item
         android:id="@+id/filter_other"
         android:title="Other" />
+    <item
+        android:id="@+id/filter_browse"
+        android:title="Browse" />
 
 </menu>
-
